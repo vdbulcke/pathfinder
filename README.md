@@ -11,6 +11,20 @@ Select pane from currently selected tab:
 ![Pane](./assets/pane.png)
 
 
+## Key Bindings
+
+
+| Key            | Action                           | Mode     |
+| ---------------| ---------------------------------|----------|
+| Up/Down key    | move up/down list                | tab/pane |
+| PageUp         | move top of list                 | tab only |
+| Esc/Ctrl + c   | quit                             | tab/pane |
+| Tab            | switch mode                      | tab/pane |
+| Left/Right key | move left/right cursor in prompt | tab/pane |
+
+
+
+
 ## Should I use this plugin? 
 
 This is plugin is a mixed of functionalities from [session-manager](https://github.com/zellij-org/zellij/tree/main/default-plugins/session-manager) and [room](https://github.com/rvcas/room), you should look at those first.
