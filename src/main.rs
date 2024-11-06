@@ -42,6 +42,96 @@ impl Default for State {
 }
 
 impl State {
+    fn handle_key_event(&mut self, key: KeyWithModifier) -> bool {
+        let mut should_render = true;
+        match key.bare_key {
+            BareKey::Enter => {
+                if self.is_tab_vue_focussed {
+                    if let Some(p) = self.tab_match {
+                        close_focus();
+                        switch_tab_to(p as u32 + 1);
+                    }
+                } else if let Some(pane_id) = self.pane_match {
+                    close_focus();
+                    focus_terminal_pane(pane_id, true);
+                }
+            }
+            BareKey::Backspace => {
+                if self.remove_input_at_index() {
+                    if self.is_tab_vue_focussed {
+                        self.fuzzy_find_tab();
+                    } else {
+                        self.fuzzy_find_pane();
+                    }
+                }
+                should_render = true;
+            }
+
+            BareKey::Down => {
+                if self.is_tab_vue_focussed {
+                    self.move_down_tab();
+                } else {
+                    self.move_down_pane();
+                }
+
+                should_render = true;
+            }
+            BareKey::PageUp => {
+                if self.is_tab_vue_focussed {
+                    self.seek_tab(0);
+                }
+                should_render = true;
+            }
+            BareKey::Up => {
+                if self.is_tab_vue_focussed {
+                    self.move_up_tab();
+                } else {
+                    self.move_up_pane();
+                }
+                should_render = true;
+            }
+            BareKey::Left => {
+                if self.input_cusror_index > 0 {
+                    self.input_cusror_index -= 1;
+                }
+                should_render = true;
+            }
+            BareKey::Right => {
+                if self.input_cusror_index < self.input.len() {
+                    self.input_cusror_index += 1;
+                }
+                should_render = true;
+            }
+
+            BareKey::Esc => {
+                self.close();
+                should_render = true;
+            }
+            BareKey::Char('c') if key.has_modifiers(&[KeyModifier::Ctrl]) => {
+                self.close();
+                should_render = true;
+            }
+
+            BareKey::Tab => {
+                self.change_mode();
+                should_render = true;
+            }
+            BareKey::Char(c) => {
+                if self.insert_input_at_index(c) {
+                    if self.is_tab_vue_focussed {
+                        self.fuzzy_find_tab();
+                    } else {
+                        self.fuzzy_find_pane();
+                    }
+                }
+                should_render = true;
+            }
+            _ => (),
+        };
+
+        should_render
+    }
+
     /// close current plugins and its hepler pane
     /// get the focused tab position
     fn get_focused_tab(&mut self) {
@@ -458,79 +548,8 @@ impl ZellijPlugin for State {
                 self.pane_manifest = pane_manifest;
                 should_render = true;
             }
-            Event::Key(Key::Char('\n')) => {
-                if self.is_tab_vue_focussed {
-                    if let Some(p) = self.tab_match {
-                        close_focus();
-                        switch_tab_to(p as u32 + 1);
-                    }
-                } else if let Some(pane_id) = self.pane_match {
-                    close_focus();
-                    focus_terminal_pane(pane_id, true);
-                }
-            }
-            Event::Key(Key::Backspace) => {
-                if self.remove_input_at_index() {
-                    if self.is_tab_vue_focussed {
-                        self.fuzzy_find_tab();
-                    } else {
-                        self.fuzzy_find_pane();
-                    }
-                }
-                should_render = true;
-            }
-            Event::Key(Key::Char(c)) => {
-                if self.insert_input_at_index(c) {
-                    if self.is_tab_vue_focussed {
-                        self.fuzzy_find_tab();
-                    } else {
-                        self.fuzzy_find_pane();
-                    }
-                }
-                should_render = true;
-            }
-            Event::Key(Key::Down) => {
-                if self.is_tab_vue_focussed {
-                    self.move_down_tab();
-                } else {
-                    self.move_down_pane();
-                }
-
-                should_render = true;
-            }
-            Event::Key(Key::PageUp) => {
-                if self.is_tab_vue_focussed {
-                    self.seek_tab(0);
-                }
-                should_render = true;
-            }
-            Event::Key(Key::Up) => {
-                if self.is_tab_vue_focussed {
-                    self.move_up_tab();
-                } else {
-                    self.move_up_pane();
-                }
-                should_render = true;
-            }
-            Event::Key(Key::Left) => {
-                if self.input_cusror_index > 0 {
-                    self.input_cusror_index -= 1;
-                }
-                should_render = true;
-            }
-            Event::Key(Key::Right) => {
-                if self.input_cusror_index < self.input.len() {
-                    self.input_cusror_index += 1;
-                }
-                should_render = true;
-            }
-            Event::Key(Key::Esc | Key::Ctrl('c')) => {
-                self.close();
-                should_render = true;
-            }
-            Event::Key(Key::BackTab) => {
-                self.change_mode();
-                should_render = true;
+            Event::Key(key) => {
+                should_render = self.handle_key_event(key);
             }
             _ => (),
         };
