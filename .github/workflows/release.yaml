@@ -38,7 +38,7 @@ jobs:
 
 
       - name: Sign binary
-        run: cosign sign-blob --oidc-issuer=https://token.actions.githubusercontent.com --output-certificate=cosign_cert.pem --output-signature=cosign.sig target/wasm32-wasi/release/pathfinder.wasm
+        run: cosign sign-blob --oidc-issuer=https://token.actions.githubusercontent.com --output-certificate=cosign_cert.pem --output-signature=cosign.sig target/wasm32-wasip1/release/pathfinder.wasm
         env:
           ## Cosign ENV Vars
           COSIGN_EXPERIMENTAL: 1
@@ -49,6 +49,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/wasm32-wasi/release/pathfinder.wasm
+            target/wasm32-wasip1/release/pathfinder.wasm
             cosign.sig
             cosign_cert.pem
