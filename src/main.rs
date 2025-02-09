@@ -6,10 +6,16 @@ use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use zellij_tile::prelude::*;
 
+enum View {
+    Session,
+    Tab,
+    Pane,
+}
+
 struct State {
     userspace_configuration: BTreeMap<String, String>,
 
-    is_tab_vue_focussed: bool,
+    current_view: View,
     focus_tab_pos: usize,
     result_index: usize,
     tab_infos: Vec<TabInfo>,
@@ -17,8 +23,11 @@ struct State {
     input: String,
     input_cusror_index: usize,
     tab_match: Option<usize>,
+    session_match: Option<String>,
     pane_match: Option<u32>,
     pane_title_match: String,
+    // sessions: Vec<SessionInfo>,
+    sessions: Vec<String>,
     fz_matcher: SkimMatcherV2,
 }
 
@@ -26,7 +35,8 @@ impl Default for State {
     fn default() -> Self {
         Self {
             userspace_configuration: BTreeMap::default(),
-            is_tab_vue_focussed: true,
+            current_view: View::Tab,
+
             focus_tab_pos: 0,
             result_index: 0,
             tab_infos: Vec::default(),
@@ -34,8 +44,10 @@ impl Default for State {
             input: String::default(),
             input_cusror_index: 0,
             tab_match: None,
+            session_match: None,
             pane_match: None,
             pane_title_match: String::default(),
+            sessions: Vec::default(),
             fz_matcher: SkimMatcherV2::default(),
         }
     }
@@ -45,48 +57,79 @@ impl State {
     fn handle_key_event(&mut self, key: KeyWithModifier) -> bool {
         let mut should_render = true;
         match key.bare_key {
-            BareKey::Enter => {
-                if self.is_tab_vue_focussed {
+            BareKey::Enter => match self.current_view {
+                View::Tab => {
                     if let Some(p) = self.tab_match {
                         close_focus();
                         switch_tab_to(p as u32 + 1);
                     }
-                } else if let Some(pane_id) = self.pane_match {
-                    close_focus();
-                    focus_terminal_pane(pane_id, true);
                 }
-            }
+                View::Pane => {
+                    if let Some(pane_id) = self.pane_match {
+                        close_focus();
+                        focus_terminal_pane(pane_id, true);
+                    }
+                }
+                View::Session => {
+                    if let Some(sess) = &self.session_match {
+                        close_focus();
+                        switch_session(Some(sess));
+                    }
+                }
+            },
             BareKey::Backspace => {
                 if self.remove_input_at_index() {
-                    if self.is_tab_vue_focussed {
-                        self.fuzzy_find_tab();
-                    } else {
-                        self.fuzzy_find_pane();
+                    match self.current_view {
+                        View::Tab => {
+                            self.fuzzy_find_tab();
+                        }
+
+                        View::Pane => {
+                            self.fuzzy_find_pane();
+                        }
+                        View::Session => {
+                            self.fuzzy_find_session();
+                        }
                     }
                 }
                 should_render = true;
             }
 
             BareKey::Down => {
-                if self.is_tab_vue_focussed {
-                    self.move_down_tab();
-                } else {
-                    self.move_down_pane();
+                match self.current_view {
+                    View::Tab => {
+                        self.move_down_tab();
+                    }
+
+                    View::Pane => {
+                        self.move_down_pane();
+                    }
+                    View::Session => {
+                        self.move_down_session();
+                    }
                 }
 
                 should_render = true;
             }
             BareKey::PageUp => {
-                if self.is_tab_vue_focussed {
+                if let View::Tab = self.current_view {
                     self.seek_tab(0);
                 }
+
                 should_render = true;
             }
             BareKey::Up => {
-                if self.is_tab_vue_focussed {
-                    self.move_up_tab();
-                } else {
-                    self.move_up_pane();
+                match self.current_view {
+                    View::Tab => {
+                        self.move_up_tab();
+                    }
+
+                    View::Pane => {
+                        self.move_up_pane();
+                    }
+                    View::Session => {
+                        self.move_up_session();
+                    }
                 }
                 should_render = true;
             }
@@ -118,10 +161,17 @@ impl State {
             }
             BareKey::Char(c) => {
                 if self.insert_input_at_index(c) {
-                    if self.is_tab_vue_focussed {
-                        self.fuzzy_find_tab();
-                    } else {
-                        self.fuzzy_find_pane();
+                    match self.current_view {
+                        View::Tab => {
+                            self.fuzzy_find_tab();
+                        }
+
+                        View::Pane => {
+                            self.fuzzy_find_pane();
+                        }
+                        View::Session => {
+                            self.fuzzy_find_session();
+                        }
                     }
                 }
                 should_render = true;
@@ -141,7 +191,7 @@ impl State {
                 if self.tab_match.is_none() {
                     self.tab_match = Some(i);
 
-                    if self.is_tab_vue_focussed {
+                    if let View::Tab = self.current_view {
                         self.result_index = i;
                     }
                 }
@@ -157,9 +207,21 @@ impl State {
         // reset input
         self.input = String::default();
         self.input_cusror_index = 0;
-        self.is_tab_vue_focussed = !self.is_tab_vue_focussed;
 
-        if !self.is_tab_vue_focussed {
+        match self.current_view {
+            View::Tab => {
+                self.current_view = View::Pane;
+            }
+
+            View::Pane => {
+                self.current_view = View::Session;
+            }
+            View::Session => {
+                self.current_view = View::Tab;
+            }
+        }
+
+        if let View::Pane = self.current_view {
             // pane view
             self.pane_match = None;
             self.pane_title_match = String::default();
@@ -281,6 +343,92 @@ impl State {
         if let Some(i) = last_match {
             self.tab_match = Some(i);
             self.result_index = i;
+        }
+    }
+
+    fn move_down_session(&mut self) {
+        let mut first_match = None;
+        let mut seek_result = false;
+        let mut found_next = None;
+
+        for (i, session) in self.sessions.iter().enumerate() {
+            if self.input == String::default()
+                || self.fz_matcher.fuzzy_match(session, &self.input).is_some()
+            {
+                if first_match.is_none() {
+                    first_match = Some(i);
+                }
+
+                if i == self.result_index {
+                    seek_result = true;
+                    continue;
+                }
+
+                if seek_result {
+                    if let Some(sess) = self.sessions.get(i) {
+                        found_next = Some(i);
+                        self.session_match = Some(sess.to_owned());
+                        self.result_index = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if found_next.is_none() {
+            if let Some(i) = first_match {
+                if let Some(sess) = self.sessions.get(i) {
+                    self.session_match = Some(sess.to_owned());
+                    self.result_index = i;
+                }
+            }
+        }
+    }
+
+    fn move_up_session(&mut self) {
+        let mut prev_match = None;
+        let mut last_match = None;
+
+        for (i, session) in self.sessions.iter().enumerate() {
+            if self.input == String::default()
+                || self.fz_matcher.fuzzy_match(session, &self.input).is_some()
+            {
+                if i == self.result_index && prev_match.is_some() {
+                    break;
+                }
+                prev_match = Some(i);
+                last_match = Some(i);
+            }
+        }
+
+        if let Some(i) = prev_match {
+            if let Some(sess) = self.sessions.get(i) {
+                self.session_match = Some(sess.to_owned());
+                self.result_index = i;
+            }
+            return;
+        }
+        if let Some(i) = last_match {
+            if let Some(sess) = self.sessions.get(i) {
+                self.session_match = Some(sess.to_owned());
+                self.result_index = i;
+            }
+        }
+    }
+
+    fn fuzzy_find_session(&mut self) {
+        let mut best_score = 0;
+
+        self.session_match = None;
+        for (i, session) in self.sessions.iter().enumerate() {
+            if let Some(score) = self.fz_matcher.fuzzy_match(session, &self.input) {
+                if score > best_score {
+                    best_score = score;
+                    self.result_index = i;
+
+                    self.session_match = Some(session.to_owned());
+                }
+            }
         }
     }
 
@@ -531,6 +679,7 @@ impl ZellijPlugin for State {
             EventType::TabUpdate,
             EventType::PaneUpdate,
             EventType::Key,
+            EventType::SessionUpdate,
         ]);
 
         rename_plugin_pane(get_plugin_ids().plugin_id, "PathFinder");
@@ -548,6 +697,14 @@ impl ZellijPlugin for State {
                 self.pane_manifest = pane_manifest;
                 should_render = true;
             }
+            Event::SessionUpdate(session_infos, _) => {
+                self.sessions = session_infos
+                    .into_iter()
+                    .map(|session_info| session_info.name)
+                    .collect();
+                // self.sessions = session_infos;
+            }
+
             Event::Key(key) => {
                 should_render = self.handle_key_event(key);
             }
@@ -565,22 +722,48 @@ impl ZellijPlugin for State {
         // 4 lines for CWD and keybinding views
         let mut count = 4;
 
-        if self.is_tab_vue_focussed {
-            print_ribbon_with_coordinates(Text::new("Tabs Selector").selected(), 1, 0, None, None);
-            print_ribbon_with_coordinates(Text::new("Panes Selector"), 18, 0, None, None);
-            println!();
-            println!();
-        } else {
-            print_ribbon_with_coordinates(Text::new("Tabs Selector"), 1, 0, None, None);
-            print_ribbon_with_coordinates(
-                Text::new("Panes Selector").selected(),
-                18,
-                0,
-                None,
-                None,
-            );
-            println!();
-            println!();
+        match self.current_view {
+            View::Tab => {
+                print_ribbon_with_coordinates(
+                    Text::new("Tabs Selector").selected(),
+                    1,
+                    0,
+                    None,
+                    None,
+                );
+                print_ribbon_with_coordinates(Text::new("Panes Selector"), 18, 0, None, None);
+                print_ribbon_with_coordinates(Text::new("Sessions Selector"), 36, 0, None, None);
+                println!();
+                println!();
+            }
+
+            View::Pane => {
+                print_ribbon_with_coordinates(Text::new("Tabs Selector"), 1, 0, None, None);
+                print_ribbon_with_coordinates(
+                    Text::new("Panes Selector").selected(),
+                    18,
+                    0,
+                    None,
+                    None,
+                );
+                print_ribbon_with_coordinates(Text::new("Sessions Selector"), 36, 0, None, None);
+                println!();
+                println!();
+            }
+            View::Session => {
+                print_ribbon_with_coordinates(Text::new("Tabs Selector"), 1, 0, None, None);
+
+                print_ribbon_with_coordinates(Text::new("Panes Selector"), 18, 0, None, None);
+                print_ribbon_with_coordinates(
+                    Text::new("Sessions Selector").selected(),
+                    36,
+                    0,
+                    None,
+                    None,
+                );
+                println!();
+                println!();
+            }
         }
 
         count += 1;
@@ -588,94 +771,151 @@ impl ZellijPlugin for State {
         self.print_prompt(rows, cols);
         count += 1;
 
-        if self.is_tab_vue_focussed {
-            println!("Tabs: ");
+        match self.current_view {
+            View::Tab => {
+                println!("Tabs: ");
 
-            count += 1;
+                count += 1;
 
-            for (i, t) in self.tab_infos.iter().enumerate() {
-                if self
-                    .fz_matcher
-                    .fuzzy_match(t.name.as_str(), &self.input)
-                    .is_some()
-                {
-                    // limits display of completion
-                    // based on available rows in pane
-                    // with arbitrary buffer for safety
-                    if count >= rows - 4 {
-                        println!(" - {}", "...".dimmed());
-                        break;
+                for (i, t) in self.tab_infos.iter().enumerate() {
+                    if self
+                        .fz_matcher
+                        .fuzzy_match(t.name.as_str(), &self.input)
+                        .is_some()
+                    {
+                        // limits display of completion
+                        // based on available rows in pane
+                        // with arbitrary buffer for safety
+                        if count >= rows - 4 {
+                            println!(" - {}", "...".dimmed());
+                            break;
+                        }
+
+                        if i == self.result_index {
+                            println!(" - {}", t.name.blue().bold());
+                        } else {
+                            println!(" - {}", t.name.dimmed());
+                        }
+
+                        count += 1;
                     }
-
-                    if i == self.result_index {
-                        println!(" - {}", t.name.blue().bold());
-                    } else {
-                        println!(" - {}", t.name.dimmed());
+                }
+                println!();
+                if let Some(m) = self.tab_match {
+                    if let Some(t) = self.tab_infos.get(m) {
+                        println!(
+                            "{} {}",
+                            color_bold(WHITE, "Selected Tab ->"),
+                            t.name.as_str().blue().bold()
+                        );
                     }
-
-                    count += 1;
+                } else {
+                    println!(
+                        "{} {}",
+                        color_bold(WHITE, "Selected Tab ->"),
+                        "No matches found".dimmed()
+                    );
                 }
             }
-            println!();
-        } else {
-            println!("Panes: ");
-            if let Some(p) = self.tab_match {
-                if let Some(panes) = self.pane_manifest.panes.get(&p) {
-                    for (i, pane) in panes.iter().enumerate() {
-                        if !pane.is_plugin
-                            && self
-                                .fz_matcher
-                                .fuzzy_match(pane.title.as_str(), &self.input)
-                                .is_some()
-                        {
-                            // limits display of completion
-                            // based on available rows in pane
-                            // with arbitrary buffer for safety
-                            if count >= rows - 4 {
-                                println!(" - {}", "...".dimmed());
-                                break;
+            View::Pane => {
+                println!("Panes: ");
+                if let Some(p) = self.tab_match {
+                    if let Some(panes) = self.pane_manifest.panes.get(&p) {
+                        for (i, pane) in panes.iter().enumerate() {
+                            if !pane.is_plugin
+                                && self
+                                    .fz_matcher
+                                    .fuzzy_match(pane.title.as_str(), &self.input)
+                                    .is_some()
+                            {
+                                // limits display of completion
+                                // based on available rows in pane
+                                // with arbitrary buffer for safety
+                                if count >= rows - 4 {
+                                    println!(" - {}", "...".dimmed());
+                                    break;
+                                }
+                                if i == self.result_index {
+                                    println!(" - {}", pane.title.blue().bold());
+                                } else {
+                                    println!(" - {}", pane.title.dimmed());
+                                }
+                                count += 1;
                             }
-                            if i == self.result_index {
-                                println!(" - {}", pane.title.blue().bold());
-                            } else {
-                                println!(" - {}", pane.title.dimmed());
-                            }
-                            count += 1;
                         }
                     }
                 }
+
+                println!();
+                if !self.pane_title_match.is_empty() {
+                    println!(
+                        "{} {}",
+                        color_bold(WHITE, "Selected Pane ->"),
+                        self.pane_title_match.as_str().blue().bold()
+                    );
+                } else {
+                    println!(
+                        "{} {}",
+                        color_bold(WHITE, "Selected Pane ->"),
+                        "No matches found".dimmed()
+                    );
+                }
+
+                if let Some(m) = self.tab_match {
+                    if let Some(t) = self.tab_infos.get(m) {
+                        println!(
+                            "{} {}",
+                            color_bold(WHITE, "Selected Tab ->"),
+                            t.name.as_str().blue().bold()
+                        );
+                    }
+                } else {
+                    println!(
+                        "{} {}",
+                        color_bold(WHITE, "Selected Tab ->"),
+                        "No matches found".dimmed()
+                    );
+                }
             }
 
-            println!();
-            if !self.pane_title_match.is_empty() {
-                println!(
-                    "{} {}",
-                    color_bold(WHITE, "Selected Pane ->"),
-                    self.pane_title_match.as_str().blue().bold()
-                );
-            } else {
-                println!(
-                    "{} {}",
-                    color_bold(WHITE, "Selected Pane ->"),
-                    "No matches found".dimmed()
-                );
-            }
-        }
+            View::Session => {
+                println!("Sessions: ");
+                for (i, session) in self.sessions.iter().enumerate() {
+                    if self.fz_matcher.fuzzy_match(session, &self.input).is_some() {
+                        // limits display of completion
+                        // based on available rows in pane
+                        // with arbitrary buffer for safety
+                        if count >= rows - 4 {
+                            println!(" - {}", "...".dimmed());
+                            break;
+                        }
 
-        if let Some(m) = self.tab_match {
-            if let Some(t) = self.tab_infos.get(m) {
-                println!(
-                    "{} {}",
-                    color_bold(WHITE, "Selected Tab ->"),
-                    t.name.as_str().blue().bold()
-                );
+                        if i == self.result_index {
+                            println!(" - {}", session.blue().bold());
+                        } else {
+                            println!(" - {}", session.dimmed());
+                        }
+
+                        count += 1;
+                    }
+                }
+
+                println!();
+
+                if let Some(sess) = &self.session_match {
+                    println!(
+                        "{} {}",
+                        color_bold(WHITE, "Selected Session ->"),
+                        sess.as_str().blue().bold()
+                    );
+                } else {
+                    println!(
+                        "{} {}",
+                        color_bold(WHITE, "Selected Session ->"),
+                        "No matches found".dimmed()
+                    );
+                }
             }
-        } else {
-            println!(
-                "{} {}",
-                color_bold(WHITE, "Selected Tab ->"),
-                "No matches found".dimmed()
-            );
         }
 
         // Key binding view
@@ -689,7 +929,7 @@ impl ZellijPlugin for State {
             println!("tab match: {}", self.tab_match.unwrap_or(42));
             println!("pane match: {}", self.pane_match.unwrap_or(42));
             println!("focussed tab : {}", self.focus_tab_pos);
-            println!("is tab vue: {}", self.is_tab_vue_focussed);
+
             println!("result_index: {}", self.result_index);
 
             println!(
